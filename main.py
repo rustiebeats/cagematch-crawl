@@ -70,6 +70,7 @@ async def run(args: argparse.Namespace) -> None:
                 await crawl_appearances(
                     fetcher, appearances_conn, resume=args.resume,
                     promo_conn=promo_conn, wrestler_conn=wrestler_conn,
+                    limit=args.limit,
                 )
                 for c in extra_conns:
                     if c is not conn:
@@ -119,6 +120,12 @@ def main() -> None:
         "--wrestlers-db",
         default=None,
         help="Path to existing wrestlers source DB",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Process at most N wrestlers (useful for smoke tests)",
     )
     args = parser.parse_args()
     asyncio.run(run(args))

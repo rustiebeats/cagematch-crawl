@@ -363,3 +363,70 @@ def test_appearances_written_to_appearances_conn(appearances_conn, promo_conn, w
     ).fetchall()}
     assert "appearances" in promo_tables  # init_db includes it, but it's empty
     assert promo_conn.execute("SELECT COUNT(*) FROM appearances").fetchone()[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# GREEN: limit — crawl_appearances respects the limit kwarg
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_limit_caps_wrestlers_processed(tmp_path, monkeypatch):
+    """With limit=2 only 2 of 5 wrestlers are processed."""
+    import sqlite3 as _sqlite3
+    from crawlers.appearances import crawl_appearances
+    from fetcher import Fetcher
+
+    # Source DB with 5 wrestlers and 2 promotions
+    src = init_db(str(tmp_path / "src.db"))
+    for wid in range(1, 6):
+        src.execute(f"INSERT INTO wrestlers (id, name) VALUES ({wid}, 'W{wid}')")
+    src.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (1, 'WWE', '2024-01-01')")
+    src.commit()
+
+    out = init_appearances_db(str(tmp_path / "out.db"))
+
+    # Stub fetch so no real HTTP calls are made — return empty page (stops pagination)
+    from bs4 import BeautifulSoup
+    async def fake_fetch(params):
+        return BeautifulSoup("<html></html>", "lxml")
+
+    async with Fetcher(delay=0, concurrency=5) as fetcher:
+        monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+        await crawl_appearances(fetcher, out, resume=False,
+                                promo_conn=src, wrestler_conn=src, limit=2)
+
+    crawled = out.execute(
+        "SELECT COUNT(*) FROM appearances_crawl_state WHERE crawled_at IS NOT NULL"
+    ).fetchone()[0]
+    assert crawled == 2
+
+
+@pytest.mark.xfail(strict=True, reason="red: expects all 5 wrestlers crawled despite limit=2")
+@pytest.mark.asyncio
+async def test_red_limit_ignored(tmp_path, monkeypatch):
+    """Documents that without limit enforcement all wrestlers would be crawled."""
+    import sqlite3 as _sqlite3
+    from crawlers.appearances import crawl_appearances
+    from fetcher import Fetcher
+
+    src = init_db(str(tmp_path / "src.db"))
+    for wid in range(1, 6):
+        src.execute(f"INSERT INTO wrestlers (id, name) VALUES ({wid}, 'W{wid}')")
+    src.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (1, 'WWE', '2024-01-01')")
+    src.commit()
+
+    out = init_appearances_db(str(tmp_path / "out.db"))
+
+    from bs4 import BeautifulSoup
+    async def fake_fetch(params):
+        return BeautifulSoup("<html></html>", "lxml")
+
+    async with Fetcher(delay=0, concurrency=5) as fetcher:
+        monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+        await crawl_appearances(fetcher, out, resume=False,
+                                promo_conn=src, wrestler_conn=src, limit=2)
+
+    crawled = out.execute(
+        "SELECT COUNT(*) FROM appearances_crawl_state WHERE crawled_at IS NOT NULL"
+    ).fetchone()[0]
+    assert crawled == 5  # wrong: limit=2 means only 2 should be crawled

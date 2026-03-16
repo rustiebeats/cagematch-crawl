@@ -17,6 +17,7 @@ async def crawl_appearances(
     *,
     promo_conn: sqlite3.Connection | None = None,
     wrestler_conn: sqlite3.Connection | None = None,
+    limit: int | None = None,
 ) -> None:
     promo_count = (promo_conn or conn).execute(
         "SELECT COUNT(*) FROM promotions WHERE crawled_at IS NOT NULL"
@@ -31,6 +32,8 @@ async def crawl_appearances(
     all_ids = get_known_ids(wrestler_conn or conn, "wrestlers")
     done_ids = get_appearances_crawled_ids(conn) if resume else set()
     to_crawl = sorted(all_ids - done_ids)
+    if limit is not None:
+        to_crawl = to_crawl[:limit]
     logger.info("Wrestlers to process: %d (skipping %d)", len(to_crawl), len(done_ids))
 
     async def crawl_one(wrestler_id: int) -> None:
