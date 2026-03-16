@@ -83,10 +83,11 @@ def test_red_promotion_name_wrong():
 # ---------------------------------------------------------------------------
 
 def test_parse_single_row_with_promo_link():
+    # Real structure: promotion cell has <a><img title="WWE"/></a>
     html = """
     <table><tr class="TRow1">
       <td>1</td><td>01.02.2024</td>
-      <td><a href="?id=8&nr=5">WWE</a></td>
+      <td><a href="?id=8&amp;nr=5"><img title="WWE" alt="WWE"/></a></td>
       <td>match details</td>
     </tr></table>"""
     rows = parse_appearances_page(_soup(html))
@@ -97,7 +98,7 @@ def test_parse_trow2_included():
     html = """
     <table><tr class="TRow2">
       <td>1</td><td>15.12.2023</td>
-      <td><a href="?id=8&nr=7">AEW</a></td>
+      <td><a href="?id=8&amp;nr=7"><img title="AEW" alt="AEW"/></a></td>
       <td>match details</td>
     </tr></table>"""
     rows = parse_appearances_page(_soup(html))
@@ -108,8 +109,8 @@ def test_parse_trow2_included():
 def test_parse_multiple_rows():
     html = """
     <table>
-      <tr class="TRow1"><td>1</td><td>01.01.2024</td><td><a href="?id=8&nr=1">WWE</a></td><td>match</td></tr>
-      <tr class="TRow2"><td>2</td><td>02.01.2024</td><td><a href="?id=8&nr=2">AEW</a></td><td>match</td></tr>
+      <tr class="TRow1"><td>1</td><td>01.01.2024</td><td><a href="?id=8&amp;nr=1"><img title="WWE" alt="WWE"/></a></td><td>match</td></tr>
+      <tr class="TRow2"><td>2</td><td>02.01.2024</td><td><a href="?id=8&amp;nr=2"><img title="AEW" alt="AEW"/></a></td><td>match</td></tr>
     </table>"""
     rows = parse_appearances_page(_soup(html))
     assert len(rows) == 2
@@ -119,7 +120,7 @@ def test_parse_date_conversion():
     html = """
     <table><tr class="TRow1">
       <td>1</td><td>31.12.1999</td>
-      <td><a href="?id=8&nr=9">NWA</a></td>
+      <td><a href="?id=8&amp;nr=9"><img title="NWA" alt="NWA"/></a></td>
       <td>match details</td>
     </tr></table>"""
     rows = parse_appearances_page(_soup(html))
@@ -129,8 +130,8 @@ def test_parse_date_conversion():
 def test_parse_skips_invalid_date():
     html = """
     <table>
-      <tr class="TRow1"><td>1</td><td>not-a-date</td><td><a href="?id=8&nr=1">WWE</a></td><td>match</td></tr>
-      <tr class="TRow2"><td>2</td><td>05.06.2020</td><td><a href="?id=8&nr=2">ROH</a></td><td>match</td></tr>
+      <tr class="TRow1"><td>1</td><td>not-a-date</td><td><a href="?id=8&amp;nr=1"><img title="WWE" alt="WWE"/></a></td><td>match</td></tr>
+      <tr class="TRow2"><td>2</td><td>05.06.2020</td><td><a href="?id=8&amp;nr=2"><img title="ROH" alt="ROH"/></a></td><td>match</td></tr>
     </table>"""
     rows = parse_appearances_page(_soup(html))
     assert len(rows) == 1
@@ -486,7 +487,7 @@ async def test_pagination_second_page_s_100(tmp_path, monkeypatch):
     out = init_appearances_db(str(tmp_path / "out.db"))
 
     page_html = """<table>
-      <tr class="TRow1"><td>1</td><td>01.01.2024</td><td><a href="?id=8&nr=1">WWE</a></td><td>match</td></tr>
+      <tr class="TRow1"><td>1</td><td>01.01.2024</td><td><a href="?id=8&amp;nr=1"><img title="WWE" alt="WWE"/></a></td><td>match</td></tr>
     </table>"""
     seen_params = []
     call_count = 0

@@ -21,10 +21,14 @@ def parse_appearances_page(soup: BeautifulSoup) -> list[dict]:
             continue
         date = date_text.replace(".", "/")  # DD.MM.YYYY → DD/MM/YYYY
 
-        # Promotion link has href containing id=8&nr=
+        # Promotion link has href containing id=8&nr=; name is in img[title]
         promo_a = row.select_one("a[href*='id=8&nr=']")
         if promo_a:
-            promotion_name = promo_a.get_text(strip=True)
+            img = promo_a.find("img")
+            if img:
+                promotion_name = img.get("title") or img.get("alt") or ""
+            else:
+                promotion_name = promo_a.get_text(strip=True)
         else:
             promotion_name = cells[2].get_text(strip=True)
 
