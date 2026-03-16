@@ -53,7 +53,9 @@ async def crawl_appearances(
                 break
 
             for row in rows:
-                promo_id = promo_map.get(row["promotion_name"])
+                promo_id = row["promotion_id"]
+                if promo_id is None:
+                    promo_id = promo_map.get(row["promotion_name"])
                 if promo_id is not None:
                     appearances.append({"wrestler_id": wrestler_id, "promotion_id": promo_id, "date": row["date"]})
                 else:

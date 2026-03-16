@@ -21,21 +21,29 @@ def parse_appearances_page(soup: BeautifulSoup) -> list[dict]:
             continue
         date = date_text.replace(".", "/")  # DD.MM.YYYY → DD/MM/YYYY
 
-        # Promotion link has href containing id=8&nr=; name is in img[title]
+        # Promotion cell: <a href="?id=8&nr=X"><img src=".../X.gif" title="Name"/></a>
+        # The gif filename is the promotion ID — extract it directly.
         promo_a = row.select_one("a[href*='id=8&nr=']")
+        promotion_id = None
+        promotion_name = None
+
         if promo_a:
             img = promo_a.find("img")
             if img:
+                src = img.get("src", "")
+                m = re.search(r"/(\d+)\.gif", src)
+                if m:
+                    promotion_id = int(m.group(1))
                 promotion_name = img.get("title") or img.get("alt") or ""
             else:
                 promotion_name = promo_a.get_text(strip=True)
         else:
             promotion_name = cells[2].get_text(strip=True)
 
-        if not promotion_name:
+        if promotion_id is None and not promotion_name:
             continue
 
-        rows.append({"date": date, "promotion_name": promotion_name})
+        rows.append({"date": date, "promotion_id": promotion_id, "promotion_name": promotion_name})
     return rows
 
 
