@@ -13,10 +13,10 @@ def parse_appearances_page(soup: BeautifulSoup) -> list[dict]:
     rows = []
     for row in soup.select("tr.TRow1, tr.TRow2"):
         cells = row.find_all("td")
-        if len(cells) < 2:
+        if len(cells) < 3:
             continue
 
-        date_text = cells[0].get_text(strip=True)
+        date_text = cells[1].get_text(strip=True)
         if not re.match(r"\d{2}\.\d{2}\.\d{4}", date_text):
             continue
         date = date_text.replace(".", "/")  # DD.MM.YYYY → DD/MM/YYYY
@@ -26,7 +26,7 @@ def parse_appearances_page(soup: BeautifulSoup) -> list[dict]:
         if promo_a:
             promotion_name = promo_a.get_text(strip=True)
         else:
-            promotion_name = cells[1].get_text(strip=True) if len(cells) > 1 else ""
+            promotion_name = cells[2].get_text(strip=True)
 
         if not promotion_name:
             continue
