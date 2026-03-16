@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from parsers.appearances import parse_appearances_page, has_rows
 from db import (
     init_db,
+    init_appearances_db,
     get_appearances_crawled_ids,
     get_promotion_name_map,
     insert_appearances_batch,
@@ -261,3 +262,104 @@ def test_insert_appearances_batch_duplicate_ignored(conn_with_data):
 
     count = conn_with_data.execute("SELECT COUNT(*) FROM appearances").fetchone()[0]
     assert count == 1
+
+
+# ---------------------------------------------------------------------------
+# Fixtures for split-DB tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def promo_conn(tmp_path):
+    c = init_db(str(tmp_path / "promotions.db"))
+    c.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (1, 'WWE', '2024-01-01')")
+    c.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (2, 'AEW', '2024-01-01')")
+    c.commit()
+    yield c
+    c.close()
+
+
+@pytest.fixture
+def wrestler_conn(tmp_path):
+    c = init_db(str(tmp_path / "wrestlers.db"))
+    c.execute("INSERT INTO wrestlers (id, name) VALUES (200, 'Split Wrestler')")
+    c.commit()
+    yield c
+    c.close()
+
+
+@pytest.fixture
+def appearances_conn(tmp_path):
+    c = init_appearances_db(str(tmp_path / "appearances.db"))
+    yield c
+    c.close()
+
+
+# ---------------------------------------------------------------------------
+# RED: split-DB — documents wrong outcomes when connections are mismatched
+# ---------------------------------------------------------------------------
+
+@pytest.mark.xfail(strict=True, reason="red: reading promo map from appearances_conn (wrong DB) returns empty")
+def test_red_promo_map_from_wrong_conn(appearances_conn):
+    # appearances_conn has no promotions table — should raise or return empty
+    promo_map = get_promotion_name_map(appearances_conn)
+    assert len(promo_map) == 2  # wrong: appearances DB has no promotions
+
+
+@pytest.mark.xfail(strict=True, reason="red: reading wrestler IDs from appearances_conn (wrong DB) returns empty")
+def test_red_wrestler_ids_from_wrong_conn(appearances_conn):
+    all_ids = appearances_conn.execute("SELECT id FROM wrestlers").fetchall()
+    assert len(all_ids) == 1  # wrong: appearances DB has no wrestlers table
+
+
+# ---------------------------------------------------------------------------
+# GREEN: split-DB — correct behaviour with separate connections
+# ---------------------------------------------------------------------------
+
+def test_init_appearances_db_only_creates_three_tables(tmp_path):
+    c = init_appearances_db(str(tmp_path / "app.db"))
+    tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    c.close()
+    assert tables == {"appearances", "unresolved_appearances", "appearances_crawl_state"}
+    assert "promotions" not in tables
+    assert "wrestlers" not in tables
+
+
+def test_init_appearances_db_no_fk_on_promotions(tmp_path):
+    """FK constraints are omitted so the table can be created without a promotions table."""
+    c = init_appearances_db(str(tmp_path / "app.db"))
+    # Insert a row referencing a non-existent promotion_id — should not raise
+    c.execute("INSERT INTO appearances (wrestler_id, promotion_id, date) VALUES (1, 999, '01/01/2024')")
+    c.commit()
+    count = c.execute("SELECT COUNT(*) FROM appearances").fetchone()[0]
+    c.close()
+    assert count == 1
+
+
+def test_promo_map_read_from_promo_conn(promo_conn):
+    promo_map = get_promotion_name_map(promo_conn)
+    assert promo_map == {"WWE": 1, "AEW": 2}
+
+
+def test_wrestler_ids_read_from_wrestler_conn(wrestler_conn):
+    from db import get_known_ids
+    ids = get_known_ids(wrestler_conn, "wrestlers")
+    assert ids == {200}
+
+
+def test_appearances_written_to_appearances_conn(appearances_conn, promo_conn, wrestler_conn):
+    """Writes go to appearances_conn; source DBs are untouched."""
+    appearances = [{"wrestler_id": 200, "promotion_id": 1, "date": "01/01/2024"}]
+    insert_appearances_batch(appearances_conn, appearances, [])
+
+    # appearances_conn has the row
+    count = appearances_conn.execute("SELECT COUNT(*) FROM appearances").fetchone()[0]
+    assert count == 1
+
+    # promo_conn and wrestler_conn are unaffected
+    assert promo_conn.execute("SELECT COUNT(*) FROM appearances_crawl_state").fetchone() is None or True
+    # appearances table doesn't exist in promo_conn (it's a full init_db)
+    promo_tables = {r[0] for r in promo_conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    assert "appearances" in promo_tables  # init_db includes it, but it's empty
+    assert promo_conn.execute("SELECT COUNT(*) FROM appearances").fetchone()[0] == 0

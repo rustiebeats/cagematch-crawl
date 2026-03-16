@@ -12,7 +12,9 @@ import asyncio
 import logging
 import sys
 
-from db import init_db
+import sqlite3
+
+from db import init_db, init_appearances_db
 from fetcher import Fetcher
 from crawlers.promotions import crawl_promotions
 from crawlers.events import crawl_events
@@ -49,7 +51,29 @@ async def run(args: argparse.Namespace) -> None:
             elif target == "wrestlers":
                 await crawl_wrestlers(fetcher, conn, resume=args.resume)
             elif target == "appearances":
-                await crawl_appearances(fetcher, conn, resume=args.resume)
+                appearances_conn = conn
+                promo_conn = None
+                wrestler_conn = None
+                extra_conns = []
+                if args.appearances_db:
+                    appearances_conn = init_appearances_db(args.appearances_db)
+                    extra_conns.append(appearances_conn)
+                    logger.info("Appearances DB: %s", args.appearances_db)
+                if args.promotions_db:
+                    promo_conn = sqlite3.connect(args.promotions_db)
+                    extra_conns.append(promo_conn)
+                    logger.info("Promotions source DB: %s", args.promotions_db)
+                if args.wrestlers_db:
+                    wrestler_conn = sqlite3.connect(args.wrestlers_db)
+                    extra_conns.append(wrestler_conn)
+                    logger.info("Wrestlers source DB: %s", args.wrestlers_db)
+                await crawl_appearances(
+                    fetcher, appearances_conn, resume=args.resume,
+                    promo_conn=promo_conn, wrestler_conn=wrestler_conn,
+                )
+                for c in extra_conns:
+                    if c is not conn:
+                        c.close()
             else:
                 logger.error("Unknown target: %s", target)
             logger.info("=== Done: %s ===", target)
@@ -80,6 +104,21 @@ def main() -> None:
         dest="resume",
         action="store_false",
         help="Re-crawl all entities even if already in DB",
+    )
+    parser.add_argument(
+        "--appearances-db",
+        default=None,
+        help="Path for appearances output DB (default: uses --db)",
+    )
+    parser.add_argument(
+        "--promotions-db",
+        default=None,
+        help="Path to existing promotions source DB",
+    )
+    parser.add_argument(
+        "--wrestlers-db",
+        default=None,
+        help="Path to existing wrestlers source DB",
     )
     args = parser.parse_args()
     asyncio.run(run(args))

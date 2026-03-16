@@ -111,6 +111,31 @@ def init_db(path: str) -> sqlite3.Connection:
     return conn
 
 
+def init_appearances_db(path: str) -> sqlite3.Connection:
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS appearances (
+            wrestler_id   INTEGER,
+            promotion_id  INTEGER,
+            date          TEXT,
+            UNIQUE(wrestler_id, promotion_id, date)
+        );
+        CREATE TABLE IF NOT EXISTS unresolved_appearances (
+            wrestler_id      INTEGER,
+            promotion_name   TEXT,
+            date             TEXT,
+            UNIQUE(wrestler_id, promotion_name, date)
+        );
+        CREATE TABLE IF NOT EXISTS appearances_crawl_state (
+            wrestler_id  INTEGER PRIMARY KEY,
+            crawled_at   TEXT
+        );
+    """)
+    conn.commit()
+    return conn
+
+
 def now_utc() -> str:
     return datetime.now(timezone.utc).isoformat()
 

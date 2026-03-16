@@ -10,18 +10,25 @@ from parsers.appearances import parse_appearances_page
 logger = logging.getLogger(__name__)
 
 
-async def crawl_appearances(fetcher: Fetcher, conn: sqlite3.Connection, resume: bool = True) -> None:
-    promo_count = conn.execute(
+async def crawl_appearances(
+    fetcher: Fetcher,
+    conn: sqlite3.Connection,
+    resume: bool = True,
+    *,
+    promo_conn: sqlite3.Connection | None = None,
+    wrestler_conn: sqlite3.Connection | None = None,
+) -> None:
+    promo_count = (promo_conn or conn).execute(
         "SELECT COUNT(*) FROM promotions WHERE crawled_at IS NOT NULL"
     ).fetchone()[0]
     if promo_count == 0:
         logger.error("Promotions table is empty. Run promotions crawler first.")
         return
 
-    promo_map = get_promotion_name_map(conn)
+    promo_map = get_promotion_name_map(promo_conn or conn)
     logger.info("Loaded %d promotion names for mapping", len(promo_map))
 
-    all_ids = get_known_ids(conn, "wrestlers")
+    all_ids = get_known_ids(wrestler_conn or conn, "wrestlers")
     done_ids = get_appearances_crawled_ids(conn) if resume else set()
     to_crawl = sorted(all_ids - done_ids)
     logger.info("Wrestlers to process: %d (skipping %d)", len(to_crawl), len(done_ids))
