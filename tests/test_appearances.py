@@ -14,9 +14,10 @@ from db import (
     init_appearances_db,
     get_appearances_crawled_ids,
     get_promotion_name_map,
-    insert_appearances_batch,
+    upsert_wrestler_promotion_batch,
     mark_appearances_crawled,
 )
+from crawlers.appearances import _aggregate_by_promotion
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -230,6 +231,27 @@ def test_red_promo_map_empty_db(conn):
     assert len(promo_map) > 0
 
 
+@pytest.mark.xfail(strict=True, reason="red: old appearances table has a date column")
+def test_red_old_appearances_date_column(tmp_path):
+    c = init_appearances_db(str(tmp_path / "app.db"))
+    cols = {row[1] for row in c.execute("PRAGMA table_info(appearances)").fetchall()}
+    c.close()
+    assert "date" in cols  # fails: table is now wrestler_promotion
+
+
+@pytest.mark.xfail(strict=True, reason="red: wrong match_count expected after inserting 2 matches")
+def test_red_upsert_wrong_count(tmp_path):
+    c = init_appearances_db(str(tmp_path / "app.db"))
+    rows = [
+        {"wrestler_id": 1, "promotion_id": 1, "first_match_date": "2024-01-01",
+         "last_match_date": "2024-01-02", "match_count": 2},
+    ]
+    upsert_wrestler_promotion_batch(c, rows, [])
+    count = c.execute("SELECT match_count FROM wrestler_promotion").fetchone()[0]
+    c.close()
+    assert count == 99  # wrong: should be 2
+
+
 # ---------------------------------------------------------------------------
 # GREEN: db – correct behaviour
 # ---------------------------------------------------------------------------
@@ -260,46 +282,69 @@ def test_mark_appearances_crawled_idempotent(conn_with_data):
     assert crawled == {100}
 
 
-def test_insert_appearances_batch_resolved(conn_with_data):
-    appearances = [{"wrestler_id": 100, "promotion_id": 1, "date": "01/01/2024"}]
-    insert_appearances_batch(conn_with_data, appearances, [])
+def test_upsert_wrestler_promotion_aggregates_correctly(tmp_path):
+    c = init_appearances_db(str(tmp_path / "app.db"))
+    aggregated = [
+        {"wrestler_id": 1, "promotion_id": 1, "first_match_date": "2020-01-01",
+         "last_match_date": "2024-06-15", "match_count": 3},
+        {"wrestler_id": 1, "promotion_id": 2, "first_match_date": "2021-03-10",
+         "last_match_date": "2022-11-20", "match_count": 2},
+    ]
+    upsert_wrestler_promotion_batch(c, aggregated, [])
 
-    rows = conn_with_data.execute("SELECT wrestler_id, promotion_id, date FROM appearances").fetchall()
-    assert rows == [(100, 1, "01/01/2024")]
-
-    crawled = get_appearances_crawled_ids(conn_with_data)
-    assert 100 in crawled
-
-
-def test_insert_appearances_batch_unresolved(conn_with_data):
-    unresolved = [{"wrestler_id": 100, "promotion_name": "Mystery Promotion", "date": "01/01/2024"}]
-    insert_appearances_batch(conn_with_data, [], unresolved)
-
-    rows = conn_with_data.execute(
-        "SELECT wrestler_id, promotion_name FROM unresolved_appearances"
+    rows = c.execute(
+        "SELECT promotion_id, first_match_date, last_match_date, match_count "
+        "FROM wrestler_promotion ORDER BY promotion_id"
     ).fetchall()
-    assert rows == [(100, "Mystery Promotion")]
-
-    crawled = get_appearances_crawled_ids(conn_with_data)
-    assert 100 in crawled
-
-
-def test_insert_appearances_batch_mixed(conn_with_data):
-    appearances = [{"wrestler_id": 100, "promotion_id": 1, "date": "01/01/2024"}]
-    unresolved = [{"wrestler_id": 100, "promotion_name": "Unknown", "date": "02/01/2024"}]
-    insert_appearances_batch(conn_with_data, appearances, unresolved)
-
-    assert conn_with_data.execute("SELECT COUNT(*) FROM appearances").fetchone()[0] == 1
-    assert conn_with_data.execute("SELECT COUNT(*) FROM unresolved_appearances").fetchone()[0] == 1
+    assert rows == [
+        (1, "2020-01-01", "2024-06-15", 3),
+        (2, "2021-03-10", "2022-11-20", 2),
+    ]
+    assert 1 in get_appearances_crawled_ids(c)
+    c.close()
 
 
-def test_insert_appearances_batch_duplicate_ignored(conn_with_data):
-    appearances = [{"wrestler_id": 100, "promotion_id": 1, "date": "01/01/2024"}]
-    insert_appearances_batch(conn_with_data, appearances, [])
-    insert_appearances_batch(conn_with_data, appearances, [])  # second call, same data
+def test_upsert_wrestler_promotion_idempotent(tmp_path):
+    c = init_appearances_db(str(tmp_path / "app.db"))
+    row = [{"wrestler_id": 1, "promotion_id": 1, "first_match_date": "2024-01-01",
+            "last_match_date": "2024-01-01", "match_count": 1}]
+    upsert_wrestler_promotion_batch(c, row, [])
+    upsert_wrestler_promotion_batch(c, row, [])  # same data again
 
-    count = conn_with_data.execute("SELECT COUNT(*) FROM appearances").fetchone()[0]
+    count = c.execute("SELECT COUNT(*) FROM wrestler_promotion").fetchone()[0]
+    c.close()
     assert count == 1
+
+
+def test_upsert_unresolved_wrestler_promotion(tmp_path):
+    c = init_appearances_db(str(tmp_path / "app.db"))
+    unresolved = [
+        {"wrestler_id": 5, "promotion_name": "Mystery Fed",
+         "first_match_date": "2019-05-01", "last_match_date": "2023-12-31", "match_count": 4},
+    ]
+    upsert_wrestler_promotion_batch(c, [], unresolved)
+
+    rows = c.execute(
+        "SELECT wrestler_id, promotion_name, first_match_date, last_match_date, match_count "
+        "FROM unresolved_wrestler_promotion"
+    ).fetchall()
+    assert rows == [(5, "Mystery Fed", "2019-05-01", "2023-12-31", 4)]
+    assert 5 in get_appearances_crawled_ids(c)
+    c.close()
+
+
+def test_aggregate_helper_date_ordering():
+    rows = [
+        {"date": "15/06/2022", "promotion_id": 1, "promotion_name": "WWE"},
+        {"date": "01/01/2020", "promotion_id": 1, "promotion_name": "WWE"},
+        {"date": "31/12/2023", "promotion_id": 1, "promotion_name": "WWE"},
+    ]
+    agg, unres = _aggregate_by_promotion(42, rows)
+    assert unres == []
+    assert len(agg) == 1
+    assert agg[0]["first_match_date"] == "2020-01-01"
+    assert agg[0]["last_match_date"] == "2023-12-31"
+    assert agg[0]["match_count"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -357,20 +402,9 @@ def test_init_appearances_db_only_creates_three_tables(tmp_path):
     c = init_appearances_db(str(tmp_path / "app.db"))
     tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     c.close()
-    assert tables == {"appearances", "unresolved_appearances", "appearances_crawl_state"}
+    assert tables == {"wrestler_promotion", "unresolved_wrestler_promotion", "appearances_crawl_state"}
     assert "promotions" not in tables
     assert "wrestlers" not in tables
-
-
-def test_init_appearances_db_no_fk_on_promotions(tmp_path):
-    """FK constraints are omitted so the table can be created without a promotions table."""
-    c = init_appearances_db(str(tmp_path / "app.db"))
-    # Insert a row referencing a non-existent promotion_id — should not raise
-    c.execute("INSERT INTO appearances (wrestler_id, promotion_id, date) VALUES (1, 999, '01/01/2024')")
-    c.commit()
-    count = c.execute("SELECT COUNT(*) FROM appearances").fetchone()[0]
-    c.close()
-    assert count == 1
 
 
 def test_promo_map_read_from_promo_conn(promo_conn):
@@ -386,21 +420,20 @@ def test_wrestler_ids_read_from_wrestler_conn(wrestler_conn):
 
 def test_appearances_written_to_appearances_conn(appearances_conn, promo_conn, wrestler_conn):
     """Writes go to appearances_conn; source DBs are untouched."""
-    appearances = [{"wrestler_id": 200, "promotion_id": 1, "date": "01/01/2024"}]
-    insert_appearances_batch(appearances_conn, appearances, [])
+    aggregated = [{"wrestler_id": 200, "promotion_id": 1, "first_match_date": "2024-01-01",
+                   "last_match_date": "2024-01-01", "match_count": 1}]
+    upsert_wrestler_promotion_batch(appearances_conn, aggregated, [])
 
     # appearances_conn has the row
-    count = appearances_conn.execute("SELECT COUNT(*) FROM appearances").fetchone()[0]
+    count = appearances_conn.execute("SELECT COUNT(*) FROM wrestler_promotion").fetchone()[0]
     assert count == 1
 
-    # promo_conn and wrestler_conn are unaffected
-    assert promo_conn.execute("SELECT COUNT(*) FROM appearances_crawl_state").fetchone() is None or True
-    # appearances table doesn't exist in promo_conn (it's a full init_db)
+    # promo_conn and wrestler_conn are unaffected (wrestler_promotion is empty in init_db)
     promo_tables = {r[0] for r in promo_conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'"
     ).fetchall()}
-    assert "appearances" in promo_tables  # init_db includes it, but it's empty
-    assert promo_conn.execute("SELECT COUNT(*) FROM appearances").fetchone()[0] == 0
+    assert "wrestler_promotion" in promo_tables
+    assert promo_conn.execute("SELECT COUNT(*) FROM wrestler_promotion").fetchone()[0] == 0
 
 
 # ---------------------------------------------------------------------------

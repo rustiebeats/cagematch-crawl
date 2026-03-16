@@ -88,18 +88,22 @@ def init_db(path: str) -> sqlite3.Connection:
             location     TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS appearances (
-            wrestler_id   INTEGER REFERENCES wrestlers(id),
-            promotion_id  INTEGER REFERENCES promotions(id),
-            date          TEXT,
-            UNIQUE(wrestler_id, promotion_id, date)
+        CREATE TABLE IF NOT EXISTS wrestler_promotion (
+            wrestler_id      INTEGER REFERENCES wrestlers(id),
+            promotion_id     INTEGER REFERENCES promotions(id),
+            first_match_date TEXT,
+            last_match_date  TEXT,
+            match_count      INTEGER,
+            UNIQUE(wrestler_id, promotion_id)
         );
 
-        CREATE TABLE IF NOT EXISTS unresolved_appearances (
+        CREATE TABLE IF NOT EXISTS unresolved_wrestler_promotion (
             wrestler_id      INTEGER REFERENCES wrestlers(id),
             promotion_name   TEXT,
-            date             TEXT,
-            UNIQUE(wrestler_id, promotion_name, date)
+            first_match_date TEXT,
+            last_match_date  TEXT,
+            match_count      INTEGER,
+            UNIQUE(wrestler_id, promotion_name)
         );
 
         CREATE TABLE IF NOT EXISTS appearances_crawl_state (
@@ -115,17 +119,21 @@ def init_appearances_db(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.executescript("""
-        CREATE TABLE IF NOT EXISTS appearances (
-            wrestler_id   INTEGER,
-            promotion_id  INTEGER,
-            date          TEXT,
-            UNIQUE(wrestler_id, promotion_id, date)
+        CREATE TABLE IF NOT EXISTS wrestler_promotion (
+            wrestler_id      INTEGER,
+            promotion_id     INTEGER,
+            first_match_date TEXT,
+            last_match_date  TEXT,
+            match_count      INTEGER,
+            UNIQUE(wrestler_id, promotion_id)
         );
-        CREATE TABLE IF NOT EXISTS unresolved_appearances (
+        CREATE TABLE IF NOT EXISTS unresolved_wrestler_promotion (
             wrestler_id      INTEGER,
             promotion_name   TEXT,
-            date             TEXT,
-            UNIQUE(wrestler_id, promotion_name, date)
+            first_match_date TEXT,
+            last_match_date  TEXT,
+            match_count      INTEGER,
+            UNIQUE(wrestler_id, promotion_name)
         );
         CREATE TABLE IF NOT EXISTS appearances_crawl_state (
             wrestler_id  INTEGER PRIMARY KEY,
@@ -242,19 +250,23 @@ def get_promotion_name_map(conn: sqlite3.Connection) -> dict[str, int]:
     return {name: pid for pid, name in rows}
 
 
-def insert_appearances_batch(conn: sqlite3.Connection, appearances: list[dict], unresolved: list[dict]) -> None:
-    """Write all appearances for one wrestler in a single transaction."""
+def upsert_wrestler_promotion_batch(
+    conn: sqlite3.Connection, aggregated: list[dict], unresolved: list[dict]
+) -> None:
+    """Write aggregated per-promotion summaries for one wrestler."""
     conn.executemany(
-        "INSERT OR IGNORE INTO appearances (wrestler_id, promotion_id, date) "
-        "VALUES (:wrestler_id, :promotion_id, :date)",
-        appearances,
+        "INSERT OR REPLACE INTO wrestler_promotion "
+        "(wrestler_id, promotion_id, first_match_date, last_match_date, match_count) "
+        "VALUES (:wrestler_id, :promotion_id, :first_match_date, :last_match_date, :match_count)",
+        aggregated,
     )
     conn.executemany(
-        "INSERT OR IGNORE INTO unresolved_appearances (wrestler_id, promotion_name, date) "
-        "VALUES (:wrestler_id, :promotion_name, :date)",
+        "INSERT OR REPLACE INTO unresolved_wrestler_promotion "
+        "(wrestler_id, promotion_name, first_match_date, last_match_date, match_count) "
+        "VALUES (:wrestler_id, :promotion_name, :first_match_date, :last_match_date, :match_count)",
         unresolved,
     )
-    wrestler_id = appearances[0]["wrestler_id"] if appearances else unresolved[0]["wrestler_id"]
+    wrestler_id = (aggregated or unresolved)[0]["wrestler_id"]
     conn.execute(
         "INSERT OR REPLACE INTO appearances_crawl_state (wrestler_id, crawled_at) VALUES (?, ?)",
         (wrestler_id, now_utc()),
