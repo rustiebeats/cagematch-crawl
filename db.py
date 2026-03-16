@@ -87,6 +87,25 @@ def init_db(path: str) -> sqlite3.Connection:
             days         INTEGER,
             location     TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS appearances (
+            wrestler_id   INTEGER REFERENCES wrestlers(id),
+            promotion_id  INTEGER REFERENCES promotions(id),
+            date          TEXT,
+            UNIQUE(wrestler_id, promotion_id, date)
+        );
+
+        CREATE TABLE IF NOT EXISTS unresolved_appearances (
+            wrestler_id      INTEGER REFERENCES wrestlers(id),
+            promotion_name   TEXT,
+            date             TEXT,
+            UNIQUE(wrestler_id, promotion_name, date)
+        );
+
+        CREATE TABLE IF NOT EXISTS appearances_crawl_state (
+            wrestler_id  INTEGER PRIMARY KEY REFERENCES wrestlers(id),
+            crawled_at   TEXT
+        );
     """)
     conn.commit()
     return conn
@@ -184,3 +203,43 @@ def insert_title_reign(conn: sqlite3.Connection, data: dict) -> None:
 def get_known_ids(conn: sqlite3.Connection, table: str) -> set[int]:
     rows = conn.execute(f"SELECT id FROM {table}").fetchall()
     return {r[0] for r in rows}
+
+
+def get_appearances_crawled_ids(conn: sqlite3.Connection) -> set[int]:
+    rows = conn.execute(
+        "SELECT wrestler_id FROM appearances_crawl_state WHERE crawled_at IS NOT NULL"
+    ).fetchall()
+    return {r[0] for r in rows}
+
+
+def get_promotion_name_map(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute("SELECT id, name FROM promotions WHERE name IS NOT NULL").fetchall()
+    return {name: pid for pid, name in rows}
+
+
+def insert_appearances_batch(conn: sqlite3.Connection, appearances: list[dict], unresolved: list[dict]) -> None:
+    """Write all appearances for one wrestler in a single transaction."""
+    conn.executemany(
+        "INSERT OR IGNORE INTO appearances (wrestler_id, promotion_id, date) "
+        "VALUES (:wrestler_id, :promotion_id, :date)",
+        appearances,
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO unresolved_appearances (wrestler_id, promotion_name, date) "
+        "VALUES (:wrestler_id, :promotion_name, :date)",
+        unresolved,
+    )
+    wrestler_id = appearances[0]["wrestler_id"] if appearances else unresolved[0]["wrestler_id"]
+    conn.execute(
+        "INSERT OR REPLACE INTO appearances_crawl_state (wrestler_id, crawled_at) VALUES (?, ?)",
+        (wrestler_id, now_utc()),
+    )
+    conn.commit()
+
+
+def mark_appearances_crawled(conn: sqlite3.Connection, wrestler_id: int) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO appearances_crawl_state (wrestler_id, crawled_at) VALUES (?, ?)",
+        (wrestler_id, now_utc()),
+    )
+    conn.commit()

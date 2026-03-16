@@ -18,6 +18,7 @@ from crawlers.promotions import crawl_promotions
 from crawlers.events import crawl_events
 from crawlers.titles import crawl_titles
 from crawlers.wrestlers import crawl_wrestlers
+from crawlers.appearances import crawl_appearances
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,7 +28,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
-CRAWL_ORDER = ["promotions", "events", "titles", "wrestlers"]
+CRAWL_ORDER = ["promotions", "events", "titles", "wrestlers", "appearances"]
 
 
 async def run(args: argparse.Namespace) -> None:
@@ -47,6 +48,8 @@ async def run(args: argparse.Namespace) -> None:
                 await crawl_titles(fetcher, conn, resume=args.resume)
             elif target == "wrestlers":
                 await crawl_wrestlers(fetcher, conn, resume=args.resume)
+            elif target == "appearances":
+                await crawl_appearances(fetcher, conn, resume=args.resume)
             else:
                 logger.error("Unknown target: %s", target)
             logger.info("=== Done: %s ===", target)
