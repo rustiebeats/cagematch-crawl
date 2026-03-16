@@ -83,18 +83,18 @@ def test_red_promotion_name_wrong():
 # ---------------------------------------------------------------------------
 
 def test_parse_single_row_with_promo_link():
-    # Real structure: gif filename is the promotion ID
+    # Promotion ID comes from nr= in href (gif src may have date suffixes)
     html = """
     <table><tr class="TRow1">
       <td>1</td><td>01.02.2024</td>
-      <td><a href="?id=8&amp;nr=5"><img src="/site/main/img/ligen/normal/5.gif" title="WWE" alt="WWE"/></a></td>
+      <td><a href="?id=8&amp;nr=5"><img src="/site/main/img/ligen/normal/5__20030109-20170112.gif" title="TNA" alt="TNA"/></a></td>
       <td>match details</td>
     </tr></table>"""
     rows = parse_appearances_page(_soup(html))
-    assert rows == [{"date": "01/02/2024", "promotion_id": 5, "promotion_name": "WWE"}]
+    assert rows == [{"date": "01/02/2024", "promotion_id": 5, "promotion_name": "TNA"}]
 
 
-def test_parse_promotion_id_from_gif_src():
+def test_parse_promotion_id_from_href_nr():
     html = """
     <table><tr class="TRow1">
       <td>1</td><td>01.06.2019</td>
@@ -104,6 +104,23 @@ def test_parse_promotion_id_from_gif_src():
     rows = parse_appearances_page(_soup(html))
     assert rows[0]["promotion_id"] == 152
     assert rows[0]["promotion_name"] == "MCW Pro Wrestling"
+
+
+def test_parse_multiple_promotions_same_row():
+    # One match row with two promotions → two output entries with the same date
+    html = """
+    <table><tr class="TRow1">
+      <td>1</td><td>05.11.2003</td>
+      <td>
+        <a href="?id=8&amp;nr=5"><img src="/site/main/img/ligen/normal/5.gif" title="TNA" alt="TNA"/></a>
+        <a href="?id=8&amp;nr=9"><img src="/site/main/img/ligen/normal/9.gif" title="NWA" alt="NWA"/></a>
+      </td>
+      <td>match details</td>
+    </tr></table>"""
+    rows = parse_appearances_page(_soup(html))
+    assert len(rows) == 2
+    assert rows[0] == {"date": "05/11/2003", "promotion_id": 5, "promotion_name": "TNA"}
+    assert rows[1] == {"date": "05/11/2003", "promotion_id": 9, "promotion_name": "NWA"}
 
 
 def test_parse_trow2_included():

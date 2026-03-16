@@ -21,29 +21,27 @@ def parse_appearances_page(soup: BeautifulSoup) -> list[dict]:
             continue
         date = date_text.replace(".", "/")  # DD.MM.YYYY → DD/MM/YYYY
 
-        # Promotion cell: <a href="?id=8&nr=X"><img src=".../X.gif" title="Name"/></a>
-        # The gif filename is the promotion ID — extract it directly.
-        promo_a = row.select_one("a[href*='id=8&nr=']")
-        promotion_id = None
-        promotion_name = None
-
-        if promo_a:
-            img = promo_a.find("img")
-            if img:
-                src = img.get("src", "")
-                m = re.search(r"/(\d+)\.gif", src)
-                if m:
-                    promotion_id = int(m.group(1))
-                promotion_name = img.get("title") or img.get("alt") or ""
-            else:
-                promotion_name = promo_a.get_text(strip=True)
+        # One row may have multiple promotions — emit one entry per promotion link.
+        # Promotion ID comes from nr= in the href (reliable; gif src can have date suffixes).
+        promo_links = row.select("a[href*='id=8&nr=']")
+        if promo_links:
+            for promo_a in promo_links:
+                href = promo_a.get("href", "")
+                m = re.search(r"nr=(\d+)", href)
+                if not m:
+                    continue
+                promotion_id = int(m.group(1))
+                img = promo_a.find("img")
+                if img:
+                    promotion_name = img.get("title") or img.get("alt") or ""
+                else:
+                    promotion_name = promo_a.get_text(strip=True)
+                rows.append({"date": date, "promotion_id": promotion_id, "promotion_name": promotion_name})
         else:
             promotion_name = cells[2].get_text(strip=True)
-
-        if promotion_id is None and not promotion_name:
-            continue
-
-        rows.append({"date": date, "promotion_id": promotion_id, "promotion_name": promotion_name})
+            if not promotion_name:
+                continue
+            rows.append({"date": date, "promotion_id": None, "promotion_name": promotion_name})
     return rows
 
 
