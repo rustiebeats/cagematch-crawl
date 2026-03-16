@@ -41,7 +41,7 @@ async def crawl_appearances(
         unresolved = []
         page_num = 0
         while True:
-            params = {"id": "2", "nr": str(wrestler_id), "page": "4", "pageNum": str(page_num)}
+            params = {"id": "2", "nr": str(wrestler_id), "page": "4", "s": str(page_num * 100)}
             try:
                 soup = await fetcher.fetch(params)
             except Exception as exc:

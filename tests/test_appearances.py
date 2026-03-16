@@ -430,3 +430,104 @@ async def test_red_limit_ignored(tmp_path, monkeypatch):
         "SELECT COUNT(*) FROM appearances_crawl_state WHERE crawled_at IS NOT NULL"
     ).fetchone()[0]
     assert crawled == 5  # wrong: limit=2 means only 2 should be crawled
+
+
+# ---------------------------------------------------------------------------
+# GREEN: pagination — s= offset increments by 100 per page
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_pagination_uses_s_offset(tmp_path, monkeypatch):
+    """First page uses s=0, second page uses s=100."""
+    from crawlers.appearances import crawl_appearances
+    from fetcher import Fetcher
+    from bs4 import BeautifulSoup
+
+    src = init_db(str(tmp_path / "src.db"))
+    src.execute("INSERT INTO wrestlers (id, name) VALUES (1, 'W1')")
+    src.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (1, 'WWE', '2024-01-01')")
+    src.commit()
+
+    out = init_appearances_db(str(tmp_path / "out.db"))
+
+    seen_params = []
+
+    async def fake_fetch(params):
+        seen_params.append(dict(params))
+        return BeautifulSoup("<html></html>", "lxml")
+
+    async with Fetcher(delay=0, concurrency=1) as fetcher:
+        monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+        await crawl_appearances(fetcher, out, resume=False,
+                                promo_conn=src, wrestler_conn=src, limit=1)
+
+    assert len(seen_params) == 1  # empty page on first fetch → stops
+    assert seen_params[0]["s"] == "0"
+    assert seen_params[0]["page"] == "4"
+
+
+@pytest.mark.asyncio
+async def test_pagination_second_page_s_100(tmp_path, monkeypatch):
+    """When first page has rows, second request uses s=100."""
+    from crawlers.appearances import crawl_appearances
+    from fetcher import Fetcher
+    from bs4 import BeautifulSoup
+
+    src = init_db(str(tmp_path / "src.db"))
+    src.execute("INSERT INTO wrestlers (id, name) VALUES (1, 'W1')")
+    src.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (1, 'WWE', '2024-01-01')")
+    src.commit()
+
+    out = init_appearances_db(str(tmp_path / "out.db"))
+
+    page_html = """<table>
+      <tr class="TRow1"><td>01.01.2024</td><td><a href="?id=8&nr=1">WWE</a></td></tr>
+    </table>"""
+    seen_params = []
+    call_count = 0
+
+    async def fake_fetch(params):
+        nonlocal call_count
+        seen_params.append(dict(params))
+        call_count += 1
+        # Return rows on first call, empty on second (stops pagination)
+        if call_count == 1:
+            return BeautifulSoup(page_html, "lxml")
+        return BeautifulSoup("<html></html>", "lxml")
+
+    async with Fetcher(delay=0, concurrency=1) as fetcher:
+        monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+        await crawl_appearances(fetcher, out, resume=False,
+                                promo_conn=src, wrestler_conn=src, limit=1)
+
+    assert len(seen_params) == 2
+    assert seen_params[0]["s"] == "0"
+    assert seen_params[1]["s"] == "100"
+
+
+@pytest.mark.xfail(strict=True, reason="red: old pageNum param never matched cagematch pagination")
+@pytest.mark.asyncio
+async def test_red_pagination_uses_pagenum(tmp_path, monkeypatch):
+    """Documents the old broken behaviour where pageNum was used instead of s."""
+    from crawlers.appearances import crawl_appearances
+    from fetcher import Fetcher
+    from bs4 import BeautifulSoup
+
+    src = init_db(str(tmp_path / "src.db"))
+    src.execute("INSERT INTO wrestlers (id, name) VALUES (1, 'W1')")
+    src.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (1, 'WWE', '2024-01-01')")
+    src.commit()
+
+    out = init_appearances_db(str(tmp_path / "out.db"))
+    seen_params = []
+
+    async def fake_fetch(params):
+        seen_params.append(dict(params))
+        return BeautifulSoup("<html></html>", "lxml")
+
+    async with Fetcher(delay=0, concurrency=1) as fetcher:
+        monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+        await crawl_appearances(fetcher, out, resume=False,
+                                promo_conn=src, wrestler_conn=src, limit=1)
+
+    assert "pageNum" in seen_params[0]  # wrong: correct key is "s"
