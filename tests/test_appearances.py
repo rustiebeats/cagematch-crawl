@@ -171,6 +171,18 @@ def test_parse_skips_invalid_date():
     assert rows[0]["promotion_id"] == 2
 
 
+def test_parse_skips_impossible_date():
+    """Dates like 31.11.YYYY pass the regex but are calendar-invalid — must be skipped."""
+    html = """
+    <table>
+      <tr class="TRow1"><td>1</td><td>31.11.2024</td><td><a href="?id=8&amp;nr=1"><img src="/site/main/img/ligen/normal/1.gif" title="WWE" alt="WWE"/></a></td><td>match</td></tr>
+      <tr class="TRow2"><td>2</td><td>05.06.2020</td><td><a href="?id=8&amp;nr=2"><img src="/site/main/img/ligen/normal/2.gif" title="ROH" alt="ROH"/></a></td><td>match</td></tr>
+    </table>"""
+    rows = parse_appearances_page(_soup(html))
+    assert len(rows) == 1
+    assert rows[0]["promotion_id"] == 2
+
+
 def test_parse_fallback_to_cell_text_when_no_promo_link():
     html = """
     <table><tr class="TRow1">

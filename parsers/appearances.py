@@ -1,5 +1,6 @@
 import re
 import logging
+from datetime import datetime
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,9 @@ def parse_appearances_page(soup: BeautifulSoup) -> list[dict]:
             continue
 
         date_text = cells[1].get_text(strip=True)
-        if not re.match(r"\d{2}\.\d{2}\.\d{4}", date_text):
+        try:
+            datetime.strptime(date_text, "%d.%m.%Y")
+        except ValueError:
             continue
         date = date_text.replace(".", "/")  # DD.MM.YYYY → DD/MM/YYYY
 
