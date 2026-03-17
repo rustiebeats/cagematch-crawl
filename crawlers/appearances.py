@@ -93,6 +93,8 @@ async def crawl_appearances(
 
             all_rows.extend(rows)
             logger.debug("wrestler=%d pageNum=%d rows=%d", wrestler_id, page_num, len(rows))
+            if len(rows) < 100:
+                break
             page_num += 1
 
         if all_rows:

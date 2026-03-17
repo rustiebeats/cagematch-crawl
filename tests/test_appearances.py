@@ -551,9 +551,6 @@ async def test_pagination_second_page_s_100(tmp_path, monkeypatch):
 
     out = init_appearances_db(str(tmp_path / "out.db"))
 
-    page_html = """<table>
-      <tr class="TRow1"><td>1</td><td>01.01.2024</td><td><a href="?id=8&amp;nr=1"><img src="/site/main/img/ligen/normal/1.gif" title="WWE" alt="WWE"/></a></td><td>match</td></tr>
-    </table>"""
     seen_params = []
     call_count = 0
 
@@ -561,9 +558,9 @@ async def test_pagination_second_page_s_100(tmp_path, monkeypatch):
         nonlocal call_count
         seen_params.append(dict(params))
         call_count += 1
-        # Return rows on first call, empty on second (stops pagination)
+        # Return full 100-row page on first call so pagination continues; empty on second
         if call_count == 1:
-            return BeautifulSoup(page_html, "lxml")
+            return BeautifulSoup(_rows_html(100), "lxml")
         return BeautifulSoup("<html></html>", "lxml")
 
     async with Fetcher(delay=0, concurrency=1) as fetcher:
@@ -602,3 +599,79 @@ async def test_red_pagination_uses_pagenum(tmp_path, monkeypatch):
                                 promo_conn=src, wrestler_conn=src, limit=1)
 
     assert "pageNum" in seen_params[0]  # wrong: correct key is "s"
+
+
+# ---------------------------------------------------------------------------
+# GREEN: early stop — partial page means no next fetch
+# ---------------------------------------------------------------------------
+
+def _rows_html(n: int, promo_nr: int = 1) -> str:
+    """Generate a table with n TRow1 rows, each with a valid date and promotion link."""
+    rows = "\n".join(
+        f'<tr class="TRow1"><td>{i}</td><td>01.01.2024</td>'
+        f'<td><a href="?id=8&amp;nr={promo_nr}"><img src="/site/main/img/ligen/normal/{promo_nr}.gif" '
+        f'title="WWE" alt="WWE"/></a></td><td>match</td></tr>'
+        for i in range(1, n + 1)
+    )
+    return f"<table>{rows}</table>"
+
+
+@pytest.mark.asyncio
+async def test_partial_page_stops_pagination(tmp_path, monkeypatch):
+    """A page with fewer than 100 rows should not trigger a next-page fetch."""
+    from crawlers.appearances import crawl_appearances
+    from fetcher import Fetcher
+    from bs4 import BeautifulSoup
+
+    src = init_db(str(tmp_path / "src.db"))
+    src.execute("INSERT INTO wrestlers (id, name) VALUES (1, 'W1')")
+    src.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (1, 'WWE', '2024-01-01')")
+    src.commit()
+
+    out = init_appearances_db(str(tmp_path / "out.db"))
+    seen_params = []
+
+    async def fake_fetch(params):
+        seen_params.append(dict(params))
+        # Return 50 rows (< 100) — should stop without fetching page 2
+        return BeautifulSoup(_rows_html(50), "lxml")
+
+    async with Fetcher(delay=0, concurrency=1) as fetcher:
+        monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+        await crawl_appearances(fetcher, out, resume=False,
+                                promo_conn=src, wrestler_conn=src, limit=1)
+
+    assert len(seen_params) == 1
+
+
+@pytest.mark.xfail(strict=True, reason="red: partial page should stop pagination but without the check it fetches page 2")
+@pytest.mark.asyncio
+async def test_red_partial_page_fetches_next(tmp_path, monkeypatch):
+    """Documents the old behaviour: partial page still triggered a second fetch."""
+    from crawlers.appearances import crawl_appearances
+    from fetcher import Fetcher
+    from bs4 import BeautifulSoup
+
+    src = init_db(str(tmp_path / "src.db"))
+    src.execute("INSERT INTO wrestlers (id, name) VALUES (1, 'W1')")
+    src.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (1, 'WWE', '2024-01-01')")
+    src.commit()
+
+    out = init_appearances_db(str(tmp_path / "out.db"))
+    seen_params = []
+    call_count = 0
+
+    async def fake_fetch(params):
+        nonlocal call_count
+        seen_params.append(dict(params))
+        call_count += 1
+        if call_count == 1:
+            return BeautifulSoup(_rows_html(50), "lxml")
+        return BeautifulSoup("<html></html>", "lxml")
+
+    async with Fetcher(delay=0, concurrency=1) as fetcher:
+        monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+        await crawl_appearances(fetcher, out, resume=False,
+                                promo_conn=src, wrestler_conn=src, limit=1)
+
+    assert len(seen_params) == 2  # wrong: should stop at 1
