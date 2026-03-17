@@ -8,6 +8,7 @@ from db import get_known_ids, get_appearances_crawled_ids, \
                upsert_wrestler_promotion_batch, mark_appearances_crawled
 from fetcher import Fetcher
 from parsers.appearances import parse_appearances_page
+from parsers.event import parse_event_promotions
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,37 @@ async def crawl_appearances(
             if len(rows) < 100:
                 break
             page_num += 1
+
+        # Resolve rows that require an event-page lookup for the promotion
+        event_nrs = list(dict.fromkeys(
+            r["event_nr"] for r in all_rows if r.get("event_nr") is not None
+        ))
+        if event_nrs:
+            event_promo_map: dict[int, list[dict]] = {}
+
+            async def fetch_event_promotions(event_nr: int) -> None:
+                try:
+                    esoup = await fetcher.fetch({"id": "1", "nr": str(event_nr)})
+                    event_promo_map[event_nr] = parse_event_promotions(esoup)
+                except Exception as exc:
+                    logger.error("Fetch failed event=%d: %s", event_nr, exc)
+                    event_promo_map[event_nr] = []
+
+            await asyncio.gather(*[fetch_event_promotions(enr) for enr in event_nrs])
+
+            expanded = []
+            for r in all_rows:
+                enr = r.get("event_nr")
+                if enr is None:
+                    expanded.append(r)
+                else:
+                    for p in event_promo_map.get(enr, []):
+                        expanded.append({
+                            "date": r["date"],
+                            "promotion_id": p["promotion_id"],
+                            "promotion_name": p["promotion_name"],
+                        })
+            all_rows = expanded
 
         if all_rows:
             agg, unres = _aggregate_by_promotion(wrestler_id, all_rows)

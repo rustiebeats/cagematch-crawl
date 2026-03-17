@@ -77,6 +77,32 @@ def parse_event(event_id: int, soup: BeautifulSoup) -> dict:
     }
 
 
+def parse_event_promotions(soup: BeautifulSoup) -> list[dict]:
+    """
+    Return list of {"promotion_id": int, "promotion_name": str} from the
+    "Promotion:" InformationBoxRow on an event detail page.
+    Returns [] if the field is absent or has no parseable links.
+    """
+    for row in soup.select(".InformationBoxRow"):
+        label_el = row.select_one(".InformationBoxTitle")
+        if not label_el or label_el.get_text(strip=True).rstrip(":") != "Promotion":
+            continue
+        contents_el = row.select_one(".InformationBoxContents")
+        if not contents_el:
+            return []
+        promos = []
+        for a in contents_el.select("a[href*='id=8&nr=']"):
+            href = a.get("href", "")
+            m = re.search(r"nr=(\d+)", href)
+            if m:
+                promos.append({
+                    "promotion_id": int(m.group(1)),
+                    "promotion_name": a.get_text(strip=True),
+                })
+        return promos
+    return []
+
+
 def parse_event_matches(event_id: int, soup: BeautifulSoup) -> list[dict]:
     """
     Parse embedded match rows from an event detail page.

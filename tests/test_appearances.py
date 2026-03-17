@@ -214,6 +214,241 @@ def test_parse_empty_page():
     assert rows == []
 
 
+def test_parse_row_with_offline_promo_emits_event_nr():
+    """When promo cell is empty but MatchEventLine has an event link, emit event_nr."""
+    html = """
+    <table><tr class="TRow1">
+      <td>769</td><td>16.02.1976</td>
+      <td>&nbsp;</td>
+      <td><span class="MatchCard">some match</span>
+          <div class="MatchEventLine"><a href="?id=1&amp;nr=357244">IWA Montreal - Event</a></div>
+      </td>
+    </tr></table>"""
+    rows = parse_appearances_page(_soup(html))
+    assert rows == [{"date": "16/02/1976", "promotion_id": None, "promotion_name": None, "event_nr": 357244}]
+
+
+@pytest.mark.xfail(strict=True, reason="red: expects promotion_name key on event_nr row, but it's absent from normal rows")
+def test_red_event_nr_row_has_wrong_key():
+    html = """
+    <table><tr class="TRow1">
+      <td>1</td><td>16.02.1976</td>
+      <td>&nbsp;</td>
+      <td><div class="MatchEventLine"><a href="?id=1&amp;nr=99">Event</a></div></td>
+    </tr></table>"""
+    rows = parse_appearances_page(_soup(html))
+    # Wrong: event_nr rows don't have a "promotion_name" key (they have promotion_name=None)
+    assert "promotion_name" not in rows[0]
+
+
+# ---------------------------------------------------------------------------
+# GREEN: parse_event_promotions
+# ---------------------------------------------------------------------------
+
+from parsers.event import parse_event_promotions as _parse_event_promotions
+
+
+def test_parse_event_promotions_single():
+    html = """
+    <div class="InformationBoxRow">
+      <div class="InformationBoxTitle">Promotion:</div>
+      <div class="InformationBoxContents">
+        <a href="?id=8&amp;nr=7">New Japan Pro Wrestling</a>
+      </div>
+    </div>"""
+    promos = _parse_event_promotions(_soup(html))
+    assert promos == [{"promotion_id": 7, "promotion_name": "New Japan Pro Wrestling"}]
+
+
+def test_parse_event_promotions_multiple():
+    html = """
+    <div class="InformationBoxRow">
+      <div class="InformationBoxTitle">Promotion:</div>
+      <div class="InformationBoxContents">
+        <a href="?id=8&amp;nr=7">New Japan Pro Wrestling</a>,
+        <a href="?id=8&amp;nr=78">Consejo Mundial De Lucha Libre</a>,
+        <a href="?id=8&amp;nr=2287">All Elite Wrestling</a>
+      </div>
+    </div>"""
+    promos = _parse_event_promotions(_soup(html))
+    assert len(promos) == 3
+    assert promos[0] == {"promotion_id": 7, "promotion_name": "New Japan Pro Wrestling"}
+    assert promos[1] == {"promotion_id": 78, "promotion_name": "Consejo Mundial De Lucha Libre"}
+    assert promos[2] == {"promotion_id": 2287, "promotion_name": "All Elite Wrestling"}
+
+
+def test_parse_event_promotions_absent():
+    html = """
+    <div class="InformationBoxRow">
+      <div class="InformationBoxTitle">Location:</div>
+      <div class="InformationBoxContents">Tokyo, Japan</div>
+    </div>"""
+    assert _parse_event_promotions(_soup(html)) == []
+
+
+@pytest.mark.xfail(strict=True, reason="red: expects wrong promotion_id")
+def test_red_parse_event_promotions_wrong_id():
+    html = """
+    <div class="InformationBoxRow">
+      <div class="InformationBoxTitle">Promotion:</div>
+      <div class="InformationBoxContents">
+        <a href="?id=8&amp;nr=7">NJPW</a>
+      </div>
+    </div>"""
+    promos = _parse_event_promotions(_soup(html))
+    assert promos[0]["promotion_id"] == 999  # wrong: should be 7
+
+
+# ---------------------------------------------------------------------------
+# GREEN: crawler resolves event_nr rows via event page fetch
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_event_nr_rows_resolved_via_event_page(tmp_path, monkeypatch):
+    """Rows with event_nr are expanded by fetching the event page for promotions."""
+    from crawlers.appearances import crawl_appearances
+    from fetcher import Fetcher
+    from bs4 import BeautifulSoup
+
+    src = init_db(str(tmp_path / "src.db"))
+    src.execute("INSERT INTO wrestlers (id, name) VALUES (1, 'W1')")
+    src.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (42, 'IWA Montreal', '2024-01-01')")
+    src.commit()
+
+    out = init_appearances_db(str(tmp_path / "out.db"))
+
+    appearances_page_html = """<table>
+      <tr class="TRow1">
+        <td>769</td><td>16.02.1976</td><td>&nbsp;</td>
+        <td><div class="MatchEventLine"><a href="?id=1&amp;nr=357244">IWA Montreal - Event</a></div></td>
+      </tr>
+    </table>"""
+    event_page_html = """
+    <div class="InformationBoxRow">
+      <div class="InformationBoxTitle">Promotion:</div>
+      <div class="InformationBoxContents">
+        <a href="?id=8&amp;nr=42">IWA Montreal</a>
+      </div>
+    </div>"""
+
+    call_count = 0
+    async def fake_fetch(params):
+        nonlocal call_count
+        call_count += 1
+        if params.get("id") == "2":
+            if call_count == 1:
+                return BeautifulSoup(appearances_page_html, "lxml")
+            return BeautifulSoup("<html></html>", "lxml")
+        if params.get("id") == "1" and params.get("nr") == "357244":
+            return BeautifulSoup(event_page_html, "lxml")
+        return BeautifulSoup("<html></html>", "lxml")
+
+    async with Fetcher(delay=0, concurrency=5) as fetcher:
+        monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+        await crawl_appearances(fetcher, out, resume=False,
+                                promo_conn=src, wrestler_conn=src, limit=1)
+
+    rows = out.execute(
+        "SELECT wrestler_id, promotion_id, match_count FROM wrestler_promotion"
+    ).fetchall()
+    assert rows == [(1, 42, 1)]
+
+
+@pytest.mark.asyncio
+async def test_event_nr_multi_promotion_expands_rows(tmp_path, monkeypatch):
+    """An event with multiple promotions produces one wrestler_promotion row per promotion."""
+    from crawlers.appearances import crawl_appearances
+    from fetcher import Fetcher
+    from bs4 import BeautifulSoup
+
+    src = init_db(str(tmp_path / "src.db"))
+    src.execute("INSERT INTO wrestlers (id, name) VALUES (1, 'W1')")
+    src.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (7, 'NJPW', '2024-01-01')")
+    src.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (2287, 'AEW', '2024-01-01')")
+    src.commit()
+
+    out = init_appearances_db(str(tmp_path / "out.db"))
+
+    appearances_page_html = """<table>
+      <tr class="TRow1">
+        <td>1</td><td>04.01.2025</td><td>&nbsp;</td>
+        <td><div class="MatchEventLine"><a href="?id=1&amp;nr=398579">Wrestle Dynasty</a></div></td>
+      </tr>
+    </table>"""
+    event_page_html = """
+    <div class="InformationBoxRow">
+      <div class="InformationBoxTitle">Promotion:</div>
+      <div class="InformationBoxContents">
+        <a href="?id=8&amp;nr=7">New Japan Pro Wrestling</a>,
+        <a href="?id=8&amp;nr=2287">All Elite Wrestling</a>
+      </div>
+    </div>"""
+
+    call_count = 0
+    async def fake_fetch(params):
+        nonlocal call_count
+        call_count += 1
+        if params.get("id") == "2":
+            if call_count == 1:
+                return BeautifulSoup(appearances_page_html, "lxml")
+            return BeautifulSoup("<html></html>", "lxml")
+        if params.get("id") == "1":
+            return BeautifulSoup(event_page_html, "lxml")
+        return BeautifulSoup("<html></html>", "lxml")
+
+    async with Fetcher(delay=0, concurrency=5) as fetcher:
+        monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+        await crawl_appearances(fetcher, out, resume=False,
+                                promo_conn=src, wrestler_conn=src, limit=1)
+
+    rows = out.execute(
+        "SELECT promotion_id, match_count FROM wrestler_promotion ORDER BY promotion_id"
+    ).fetchall()
+    assert rows == [(7, 1), (2287, 1)]
+
+
+@pytest.mark.xfail(strict=True, reason="red: expects event_nr rows to be dropped without resolution")
+@pytest.mark.asyncio
+async def test_red_event_nr_not_resolved(tmp_path, monkeypatch):
+    """Documents old behaviour where event_nr rows would fall through unresolved."""
+    from crawlers.appearances import crawl_appearances
+    from fetcher import Fetcher
+    from bs4 import BeautifulSoup
+
+    src = init_db(str(tmp_path / "src.db"))
+    src.execute("INSERT INTO wrestlers (id, name) VALUES (1, 'W1')")
+    src.execute("INSERT INTO promotions (id, name, crawled_at) VALUES (42, 'IWA', '2024-01-01')")
+    src.commit()
+
+    out = init_appearances_db(str(tmp_path / "out.db"))
+
+    appearances_page_html = """<table>
+      <tr class="TRow1">
+        <td>1</td><td>16.02.1976</td><td>&nbsp;</td>
+        <td><div class="MatchEventLine"><a href="?id=1&amp;nr=357244">Event</a></div></td>
+      </tr>
+    </table>"""
+
+    call_count = 0
+    async def fake_fetch(params):
+        nonlocal call_count
+        call_count += 1
+        if params.get("id") == "2":
+            if call_count == 1:
+                return BeautifulSoup(appearances_page_html, "lxml")
+            return BeautifulSoup("<html></html>", "lxml")
+        return BeautifulSoup("<html></html>", "lxml")  # event page returns nothing
+
+    async with Fetcher(delay=0, concurrency=5) as fetcher:
+        monkeypatch.setattr(fetcher, "fetch", fake_fetch)
+        await crawl_appearances(fetcher, out, resume=False,
+                                promo_conn=src, wrestler_conn=src, limit=1)
+
+    # Wrong: expects 1 row but resolution succeeded (even with empty event page → 0 rows)
+    count = out.execute("SELECT COUNT(*) FROM wrestler_promotion").fetchone()[0]
+    assert count == 1
+
+
 # ---------------------------------------------------------------------------
 # RED: db – wrong expectations before schema existed
 # ---------------------------------------------------------------------------

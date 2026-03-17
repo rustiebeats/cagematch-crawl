@@ -38,6 +38,14 @@ def parse_appearances_page(soup: BeautifulSoup) -> list[dict]:
                     promotion_name = promo_a.get_text(strip=True)
                 rows.append({"date": date, "promotion_id": promotion_id, "promotion_name": promotion_name})
         else:
+            # Promotion image is offline — try the event link in MatchEventLine
+            event_link = row.select_one(".MatchEventLine a[href*='id=1&nr=']")
+            if event_link:
+                href = event_link.get("href", "")
+                m = re.search(r"nr=(\d+)", href)
+                if m:
+                    rows.append({"date": date, "promotion_id": None, "promotion_name": None, "event_nr": int(m.group(1))})
+                    continue
             promotion_name = cells[2].get_text(strip=True)
             if not promotion_name:
                 continue
