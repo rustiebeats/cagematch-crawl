@@ -18,9 +18,12 @@ def parse_appearances_page(soup: BeautifulSoup) -> list[dict]:
             continue
 
         date_text = cells[1].get_text(strip=True)
+        if not re.match(r"\d{2}\.\d{2}\.\d{4}", date_text):
+            continue
         try:
             datetime.strptime(date_text, "%d.%m.%Y")
         except ValueError:
+            logger.error("Invalid date %r in appearances row — skipping", date_text)
             continue
         date = date_text.replace(".", "/")  # DD.MM.YYYY → DD/MM/YYYY
 
